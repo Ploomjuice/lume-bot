@@ -5,11 +5,9 @@ from responses import get_response
 from Levenshtein import ratio
 from discord.ext import commands
 import random
-import asyncio
 from db_apis import Quote_API
-import time
-from collections import Counter
-from datetime import datetime
+import asyncio
+from collections import Counter, defaultdict
 import re
 
 # bot intents
@@ -23,11 +21,12 @@ intents.members = True  # NOQA
 bot = commands.Bot(command_prefix=']', intents=intents)
 user = os.environ['user']
 password = os.environ['password']
-quotes_db = Quote_API(user, password, 'quotes')
+quotes_db = Quote_API()
 
 # flags
 quiz_in_progress = False
-in_progress = {}
+in_progress = defaultdict(bool)
+
 
 # FUNCTIONALITY
 async def send_message(message: Message, user_message):
@@ -56,10 +55,14 @@ async def send_message(message: Message, user_message):
 
 # STARTUP
 
+
 # register an event
 @bot.event
 async def on_ready() -> None:
+
+    await quotes_db.dbu.connect(user, password, 'quotes')
     print("hi motherfuckers and fothermuckers it's Lume")
+
 
 # triggers when a message is received from someone else
 @bot.event
@@ -75,8 +78,6 @@ async def on_message(message):
 
     print(f'[{channel}] {username}: "{user_message}"')
     await send_message(message, user_message)
-
-
 
 # COMMANDS
 """
@@ -104,12 +105,13 @@ List of commands:
 - ]  
 """
 
+
 @bot.command()
 async def commands(ctx):
-    commands_list= Embed(
+
+    commands_list = Embed(
         title="List of Commands:",
-        description=
-        """
+        description="""
         **]ping**: Pong!\n
         **]commands**: View List of commands\n
         **]quotes_list** *<page_no>*: View all quotes in this server\n
@@ -137,8 +139,8 @@ async def add_quote(ctx, mention: Member, *, content: str):
     :return: nothing
     """
     channel = ctx.channel
-    server = str(ctx.guild).replace("'","")
-    quotes_db.refresh_ids(server)
+    server = str(ctx.guild).replace("'", "")
+    await quotes_db.refresh_ids(server)
 
     author = ctx.author
 
@@ -154,10 +156,8 @@ async def add_quote(ctx, mention: Member, *, content: str):
 
     ).set_footer(text=f"{server}: #{channel}")
 
-
-
     # check for dupes
-    quote_df = quotes_db.load_db(server)
+    quote_df = await quotes_db.load_db(server)
     contents = quote_df["content"]
     await ctx.send("Checking Quote...")
 
@@ -166,8 +166,8 @@ async def add_quote(ctx, mention: Member, *, content: str):
     for idx, quote in enumerate(contents):
         sim_score = ratio(content, quote)
 
-        if sim_score >= 0.5:
-            username, _ = quotes_db.retrieve_quote(server, idx+1)
+        if sim_score >= 0.7:
+            username, _ = await quotes_db.retrieve_quote(server, idx+1)
             problem_quotes.append((username, quote))
 
     # deliver warning
@@ -185,11 +185,10 @@ async def add_quote(ctx, mention: Member, *, content: str):
         await ctx.send(embed=warning)
         try:
             def confirm(m):
-                return m.author.id == ctx.author.id and m.channel.id == channel.id and m.content.lower() in ["y", "yes",
-                                                                                                          "n",
-                                                                                                          "no"]
+                return (m.author.id == ctx.author.id and m.channel.id == channel.id and m.content.lower() in
+                        ["y", "yes", "n", "no"])
 
-            message = await bot.wait_for("message", timeout=30.0, check=confirm)
+            message = await bot.wait_for("message", timeout=60.0, check=confirm)
             if message.content.lower() in ["y", "yes"]:
                 await ctx.send(f"Proceeding...")
                 pass
@@ -202,8 +201,8 @@ async def add_quote(ctx, mention: Member, *, content: str):
     # normal progression
     if author.id == mention.id:
         # directly act
-        quotes_db.add_quote(int(mention.id), str(mention.name), str(content), str(channel), str(server),
-                            str(author))
+        await quotes_db.add_quote(int(mention.id), str(mention.name), str(content), str(channel), str(server),
+                                  str(author))
         await ctx.send(embed=response)
     else:
 
@@ -212,16 +211,16 @@ async def add_quote(ctx, mention: Member, *, content: str):
                        "-# Respond with y/yes to proceed, or n/no to reject.")
         try:
             def check(m):
-                return m.author.id == mention.id and m.channel.id == channel.id and m.content.lower() in ["y", "yes", "n",
-                                                                                                     "no"]
+                return (m.author.id == mention.id and m.channel.id == channel.id and m.content.lower() in
+                        ["y", "yes", "n", "no"])
             # Wait for a message mentioning the specified user
 
-            message = await bot.wait_for("message", timeout=30.0, check=check)
+            message = await bot.wait_for("message", timeout=120.0, check=check)
             if message.content.lower() in ["y", "yes"]:
                 await ctx.send(f"Quote permitted.  Adding quote to database...")
-                quotes_db.add_quote(int(mention.id), str(mention.name), str(content), str(channel), str(server),
-                                    str(author))
-                quotes_db.refresh_ids(server)
+                await quotes_db.add_quote(int(mention.id), str(mention.name), str(content), str(channel), str(server),
+                                          str(author))
+                await quotes_db.refresh_ids(server)
                 await ctx.send(embed=response)
             elif message.content.lower() in ['n', "no"]:
                 await ctx.send("Quote has been rejected. Action Cancelled.")
@@ -229,15 +228,14 @@ async def add_quote(ctx, mention: Member, *, content: str):
             await ctx.send("Timed out. Action cancelled.")
 
 
-
 @bot.command()
 async def delete_quote(ctx, quote_id):
 
-    server = str(ctx.guild).replace("'","")
-    quotes_db.refresh_ids(server)
+    server = str(ctx.guild).replace("'", "")
+    await quotes_db.refresh_ids(server)
 
     # find quote
-    username, content = quotes_db.retrieve_quote(server, quote_id)
+    username, content = await quotes_db.retrieve_quote(server, quote_id)
 
     # Ask for confirmation
     def check(m):
@@ -251,12 +249,12 @@ async def delete_quote(ctx, quote_id):
                                                                                               "n/no to cancel.")
         await ctx.send(embed=ask)
         # Wait for the user's response
-        response = await bot.wait_for("message", timeout=30.0, check=check)
+        response = await bot.wait_for("message", timeout=60.0, check=check)
         if response.content.lower() in ["y", "yes"]:
             await ctx.send("Confirmed.  Deleting Quote...")
             # delete the quote
-            quotes_db.delete_quote(quote_id, f"{ctx.guild}")
-            quotes_db.refresh_ids()
+            await quotes_db.delete_quote(quote_id, f"{server}")
+            await quotes_db.refresh_ids(server)
         else:
             await ctx.send("Action cancelled.")
             return
@@ -269,7 +267,6 @@ async def delete_quote(ctx, quote_id):
         await ctx.send(f"Quote with ID: {quote_id} does not exist.  Action cancelled.")
         return
 
-
     response = (f"Quote Deleted.  \n"
                 f"-# quote_id: {quote_id}")
     await ctx.send(response)
@@ -278,14 +275,13 @@ async def delete_quote(ctx, quote_id):
 @bot.command()
 async def quotes_list(ctx, page=1):
     server = str(ctx.guild).replace("'", "")
-    global quiz_in_progress
-    if quiz_in_progress:
+    if in_progress[server]:
         await ctx.send("This command cannot be used while a quiz is in progress!")
         return
 
     start = 10 * (page - 1)
     end = 10 * page
-    server_quotes = quotes_db.load_db(server)
+    server_quotes = await quotes_db.load_db(server)
     if len(server_quotes) < 10:
         end = len(server_quotes)
     display = server_quotes[start:end]
@@ -319,42 +315,41 @@ async def quotes_list(ctx, page=1):
 
 @bot.command()
 async def quotes_quiz(ctx, length):
-    global quiz_in_progress
-    if quiz_in_progress:
+
+    server = str(ctx.guild).replace("'", "")
+    if in_progress[server]:
         await ctx.send("A quiz is already in progress!")
         return
-    quiz_in_progress = True
-    server = str(ctx.guild).replace("'","")
+    else:
+        in_progress[server] = True
     scoreboard = Counter()
     player_uids = {}
 
     try:
         length = int(length)
+
     except:
-        quiz_in_progress = False
+        in_progress[server] = False
         await ctx.send(f"Please enter a proper number! (improper value: \"{length}\")")
         return
 
     # load quotes
-    server_quotes = quotes_db.load_db(server)
+    server_quotes = await quotes_db.load_db(server)
     maximum, _ = server_quotes.shape
     quotes = list(server_quotes['content'])
     answers = list(server_quotes['username'])
     uids = list(server_quotes['discord_uid'])
 
-
     # check for size constraint
     if length > maximum:
         await ctx.send(f"**This server does not have enough quotes to start a quiz of size {length}!**\n"
                        f"-# This server only has {maximum} quotes.")
-        quiz_in_progress = False
+        in_progress[server] = False
         return
     else:
         # start quiz
         await ctx.send("**QUOTE QUIZ STARTING IN 5 SECONDS...**")
-        time.sleep(5)
-
-
+        await asyncio.sleep(5)
 
     def check(guess):
         return sender == guess.content and guess.channel == ctx.channel
@@ -389,7 +384,7 @@ async def quotes_quiz(ctx, length):
             message = await bot.wait_for("message", timeout=20.0, check=check)
             correct = Embed(
                 title="Correct!",
-                description=f"**{message.author.mention} got it right first!**\n The answer is **{sender}**.\n",
+                description=f"{message.author.mention} got it right first!\n The answer was **{sender}**!\n",
                 color=Color.green()
             ).set_thumbnail(url=message.author.avatar.url)
             if member:
@@ -407,32 +402,32 @@ async def quotes_quiz(ctx, length):
                 player_uids[message.author.name] = message.author.id
 
             # buffer
-            time.sleep(3)
+            await asyncio.sleep(3)
             if i != length - 1:
                 await ctx.send("**Next Question...**")
-            time.sleep(3)
+            await asyncio.sleep(3)
 
         except TimeoutError:
             reveal = Embed(
                 title="Time's up!",
-                description= f"Nobody got it right! The correct answer was {sender}!",
+                description=f"Nobody got it right! The correct answer was {sender}!",
                 color=Color.dark_red()
             ).set_image(url=sender_pfp)
 
             await ctx.send(embed=reveal)
-            time.sleep(3)
+            await asyncio.sleep(3)
             if i != length - 1:
                 await ctx.send("**Next Question...**")
-            time.sleep(3)
+            await asyncio.sleep(3)
 
     # end game stats
     sorted_scoreboard = sorted(scoreboard.items(), key=lambda item: item[1], reverse=True)
     if len(sorted_scoreboard) == 0:
-        quiz_in_progress = False
+        in_progress[server] = False
         await ctx.send("lmao you guys suck")
         return
     high_score = sorted_scoreboard[0][1]
-    players = quotes_db.load_players(server)
+    players = await quotes_db.load_players(server)
     ranks = []
 
     # update leaderboard
@@ -443,13 +438,13 @@ async def quotes_quiz(ctx, length):
         if player not in players:
 
             # add to player table
-            quotes_db.add_player(player_uids[player], player, str(server))
+            await quotes_db.add_player(player_uids[player], player, str(server))
 
         if score == high_score:
-            quotes_db.update_leaderboard(player_uids[player], correct=score, win=1)
+            await quotes_db.update_leaderboard(player_uids[player], correct=score, win=1)
             print(f"{player}'s score increased by {score}")
         else:
-            quotes_db.update_leaderboard(player_uids[player], correct=score, win=0)
+            await quotes_db.update_leaderboard(player_uids[player], correct=score, win=0)
             print(f"{player}'s score increased by {score}")
 
         # create leaderboard
@@ -470,39 +465,29 @@ async def quotes_quiz(ctx, length):
         color=Color.yellow()
     ).add_field(name="__Leaderboard__", value=leaderboard)
 
-    quiz_in_progress = False
+    in_progress[server] = False
     await ctx.send(embed=lb)
 
-@bot.command()
-async def embed_test(ctx):
-    some_url = "https://fallendeity.github.io/discord.py-masterclass/"
-    embed = Embed(
-        title="Title",
-        description="Description",
-        url=some_url,
-        color=Color.random(),
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Field name", value="Color sets that <")
-    embed.add_field(name="Field name", value="Color should be an integer or discord.Colour object")
-    embed.add_field(name="Field name", value="You can't set image width/height")
-    embed.add_field(name="Non-inline field name", value="The number of inline fields that can shown on the same row is limited to 3", inline=False)
-    embed.set_author(name="Author", url=some_url,
-                     icon_url="https://cdn.discordapp.com/attachments/1112418314581442650/1124820259384332319/fd0daad3d291ea1d.png")
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1028706344158634084/1124822236801544324/ea14e81636cb2f1c.png")
-    embed.set_thumbnail(url="https://media.discordapp.net/attachments/1112418314581442650/1124819948317986926/db28bfb9bfcdd1f6.png")
-    embed.set_footer(text="Footer", icon_url="https://cdn.discordapp.com/attachments/1112418314581442650/1124820375587528797/dc4b182a87ecee3d.png")
-    try:
-        await ctx.send(embed=embed)
-    except discord.errors.Forbidden:
-        await ctx.send("I don't have permission to send Embeds in this channel!")
 
 @bot.command()
 async def frame_quote(ctx, quote):
     pass
+
+# PROFILE COMMANDS
+
+
+@bot.command()
+async def set_nickname(ctx, nicknames):
+    if len(nicknames) == 1:
+        nicknames = [nicknames]
+    pass
+
+
 # MAIN ENTRY POINT
 def main() -> None:
     bot.run(token=os.getenv('token'))
 
+
 if __name__ == '__main__':
     main()
+    

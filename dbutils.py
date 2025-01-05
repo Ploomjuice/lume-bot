@@ -1,53 +1,81 @@
 
-import mysql.connector
+import mysql.connector.aio
 import pandas as pd
 
 
 class DBUtils:
 
-    def __init__(self, user, password, database, host="localhost"):
+    def __init__(self):
         """ Future work: Implement connection pooling """
-        self.con = mysql.connector.connect(
+        self.con = None
+
+    async def connect(self, user, password, database, host="localhost"):
+
+        self.con = await mysql.connector.aio.connect(
             host=host,
             user=user,
             password=password,
             database=database
         )
 
-    def close(self):
+    async def close(self):
         """ Close or release a connection back to the connection pool """
-        self.con.close()
-        self.con = None
+        if self.con:
+            await self.con.close()
+            self.con = None
 
-    def execute(self, query):
+    async def getdf(self, query, params=()):
         """ Execute a select query and returns the result as a dataframe """
 
-        # Step 1: Create cursor
-        rs = self.con.cursor()
+        """Execute a query asynchronously."""
+        if not self.con:
+            raise ConnectionError("Database connection is not established.")
 
-        # Step 2: Execute the query
-        rs.execute(query)
+        cursor = await self.con.cursor()
 
-        # Step 3: Get the resulting rows and column names
-        rows = rs.fetchall()
-        cols = list(rs.column_names)
+        try:
+            await cursor.execute(query, params or ())
 
-        # Step 4: Close the cursor
-        rs.close()
+            rows = await cursor.fetchall()
+            cols = [desc[0] for desc in cursor.description]
 
-        # Step 5: Return result
-        return pd.DataFrame(rows, columns=cols)
+            return pd.DataFrame(rows, columns=cols)
 
+        finally:
+            await cursor.close()
 
-    def insert_one(self, sql, val):
+    async def execute_query(self, query, params=()):
+        if not self.con:
+            raise ConnectionError("Database connection is not established.")
+
+        cursor = await self.con.cursor()
+
+        try:
+            await cursor.execute(query, params or ())
+
+        finally:
+            await cursor.close()
+
+    async def insert_one(self, sql, val):
         """ Insert a single row """
-        cursor = self.con.cursor()
-        cursor.execute(sql, val)
-        self.con.commit()
+        if not self.con:
+            raise ConnectionError("Database connection is not established.")
+
+        cursor = await self.con.cursor()
+
+        try:
+            await cursor.execute(sql, val or ())
+            await self.con.commit()
+
+        finally:
+            await cursor.close()
 
 
-    def insert_many(self, sql, vals):
+async def insert_many(self, sql, vals):
         """ Insert multiple rows """
-        cursor = self.con.cursor()
-        cursor.executemany(sql, vals)
-        self.con.commit()
+        if not self.con:
+            raise ConnectionError("Database connection is not established.")
+
+        async with self.con.cursor() as cursor:
+            cursor.execute(sql, vals)
+            self.con.commit()
