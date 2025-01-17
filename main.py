@@ -59,9 +59,10 @@ async def send_message(message: Message, user_message):
 # register an event
 @bot.event
 async def on_ready() -> None:
-
     await quotes_db.dbu.connect(user, password, 'quotes')
     print("hi motherfuckers and fothermuckers it's Lume")
+    active_guilds = [guild for guild in bot.guilds]
+    print(f"Bot is active in {len(active_guilds)} servers.")
 
 
 # triggers when a message is received from someone else
@@ -84,6 +85,13 @@ async def on_message(message):
 Commands are organized by category, and then further by game-sections for games
 """
 
+
+@bot.command()
+@commands.is_owner()
+async def sync(ctx: commands.Context) -> None:
+    """Sync commands"""
+    synced = await ctx.bot.tree.sync()
+    await ctx.send(f"Synced {len(synced)} commands globally")
 
 @bot.command()
 async def ping(ctx):
@@ -118,6 +126,9 @@ async def commands(ctx):
         **]add_quote** *<@mention> <content>*: Adds a quote to the server database\n
         **]delete_quote** *<quote_id>*: Deletes a quote from the server database, use with caution!\n
         **]quotes_quiz** *<length>*: Starts a "guess who said it?" quiz with the stored quotes\n
+        **]leaderboard**: Views server leaderboard for the quotes quiz game (WIP)\n
+        **]set_nickname** *<name1|name2|...>* Adds nicknames to your profile 
+        (can be used to answer quote quiz questions)\n
         
         """,
         color=Color.purple()
@@ -125,7 +136,8 @@ async def commands(ctx):
     await ctx.send(embed=commands_list)
 
 
-@bot.command()
+@bot.hybrid_command(name="add_quote", description="Adds a quote to the server database")
+@app_commands.describe(mention="Mention a user", content="Enter the quote here")
 async def add_quote(ctx, mention: Member, *, content: str):
     """
     Things to add:
@@ -272,7 +284,8 @@ async def delete_quote(ctx, quote_id):
     await ctx.send(response)
 
 
-@bot.command()
+@bot.hybrid_command(name="quotes_list", description="View quotes in the database")
+@app_commands.describe(page="Enter the page you wish to start from")
 async def quotes_list(ctx, page=1):
     server = str(ctx.guild).replace("'", "")
     if in_progress[server]:
@@ -352,7 +365,7 @@ async def quotes_quiz(ctx, length):
         await asyncio.sleep(5)
 
     def check(guess):
-        return sender == guess.content and guess.channel == ctx.channel
+        return (sender == guess.content or guess.content.lower() in nicknames) and guess.channel == ctx.channel
 
     # select quotes
     for i in range(length):
@@ -362,6 +375,11 @@ async def quotes_quiz(ctx, length):
 
         # aesthetic
         id = uids.pop(random_id-1)
+
+        # nicknames
+        nicknames = await quotes_db.get_personal_nicknames(server, id)
+        nicknames = list(nicknames.str.lower())
+        print(nicknames)
 
         maximum -= 1
 
@@ -469,18 +487,109 @@ async def quotes_quiz(ctx, length):
     await ctx.send(embed=lb)
 
 
-@bot.command()
+@bot.hybrid_command(name="set_nickname",description="Add usernames for yourself")
+@app_commands.describe(nicknames="Enter nicknames (separate nicknames with '|' NO SPACES)")
+async def set_nickname(ctx, *, nicknames):
+    server = str(ctx.guild).replace("'", "")
+    if in_progress[server]:
+        await ctx.send("This command cannot be used while a quiz is in progress!")
+        return
+    nicknames = [name.strip() for name in str(nicknames).split('|')]
+
+    short_names = [name for name in nicknames if len(name) < 3]
+    if len(short_names) != 0 and len(short_names) < len(nicknames):
+        warning_short = Embed(
+            title='Disclaimer',
+            description="You cannot add nicknames less than 3 characters long! Adding all other valid nicknames...",
+            color=Color.yellow()
+        )
+        await ctx.send(embed=warning_short)
+        nicknames = [nn for nn in nicknames if nn not in short_names]
+    elif len(short_names) == len(nicknames):
+        warning_terminate = Embed(
+            title="Disclaimer",
+            description="You cannot add nicknames less than 3 characters long!",
+            color=Color.dark_red()
+        )
+        await ctx.send(embed=warning_terminate)
+        return
+
+    # check dupes
+    df = await quotes_db.get_nicknames(server)
+    used_names = [(uids, used_name) for uids, used_name in zip(df['discord_uid'], df['nickname']) if used_name in nicknames]
+    names = [used_name for used_name in list(df['nickname']) if used_name in nicknames]
+    if len(used_names) != 0:
+        desc_same = "There are some users who are already using the following nicknames:\n"
+        for id, nn in used_names:
+            try:
+                member = await ctx.guild.fetch_member(id)
+                desc_same += f"- {member.name} ({nn})\n"
+
+            except:
+                # remove old nick from bygone user
+                pass
+
+        warning = Embed(
+            title="Warning!",
+            description=desc_same,
+            color=Color.dark_red()
+        )
+        await ctx.send(embed=warning)
+        nicknames = [nn for nn in nicknames if nn not in names]
+        if len(nicknames) == 0:
+            await ctx.send("Action Cancelled.")
+            return
+
+    # Proceed
+    confirm_desc = "Nickname(s) added:\n"
+    for nickname in nicknames:
+        await quotes_db.add_nickname(str(ctx.author.id), nickname, server)
+        confirm_desc += f"- {nickname}\n"
+
+    confirm = Embed(
+        title='Confirmation',
+        description=confirm_desc,
+        color=Color.green()
+    )
+    await ctx.send(embed=confirm)
+
+
+@bot.hybrid_command(name="leaderboard", description="Views server leaderboard")
+async def leaderboard(ctx):
+    server = str(ctx.guild).replace("'", "")
+
+    # info
+    leaderboard_df = await quotes_db.load_lb(server)
+    top_wins = leaderboard_df.sort_values(by=["wins"], ascending=False).head()
+    top_correct = leaderboard_df.sort_values(by=["correct"], ascending=False).head()
+
+    wins_msg = '\n'.join([f'{i}. **{row["username"]}** ({row["wins"]})' for i, row in top_wins.iterrows()])
+    corrects_msg = '\n'.join([f'{i}. **{row["username"]}** ({row["correct"]})' for i, row in top_correct.iterrows()])
+
+    # embed stuff
+    icon_url = ctx.guild.icon.url
+
+    lb = Embed(
+        title=f"{server} Quote Game Leaderboard",
+        description=f"The top players of the Quote Game in {server}!",
+        color=Color.yellow()
+
+    ).set_thumbnail(url=icon_url).add_field(name="Most Wins", value=wins_msg).add_field(name="Most Correct Answers",
+                                                                                        value=corrects_msg)
+
+    await ctx.send(embed=lb)
+
+
+@bot.hybrid_command(name="frame_quote", description="Generates an image framing the selected quote")
+@app_commands.describe(quote="Select a Quote ID from the database")
 async def frame_quote(ctx, quote):
+
     pass
 
 # PROFILE COMMANDS
 
 
-@bot.command()
-async def set_nickname(ctx, nicknames):
-    if len(nicknames) == 1:
-        nicknames = [nicknames]
-    pass
+
 
 
 # MAIN ENTRY POINT
@@ -490,4 +599,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-    

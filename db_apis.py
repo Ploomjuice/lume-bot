@@ -65,18 +65,13 @@ class Quote_API:
         vals = (player_uid, player, server)
         await self.dbu.insert_one(query, vals)
 
-    async def add_player_lb(self, player_uid):
-        query = """INSERT INTO leaderboard (discord_uid) VALUES (%s)"""
-
-        # Execute
-        await self.dbu.execute_query(query, (player_uid,))
-
     async def load_lb(self, server):
         query = f"""
-                    select username, wins, correct, uploaded, discord_server
+                    select username, wins, correct
                     from leaderboard l 
-                    join players p on (p.discord_uid = l.discord_uid)
-                    WHERE discord_server = {server}
+                    join players p on (p.main_id = l.entry_id)
+                    WHERE p.discord_server = "{server}"
+                    ORDER BY wins DESC
                 """
         df = await self.dbu.getdf(query)
         return df
@@ -86,26 +81,18 @@ class Quote_API:
                     select discord_uid, wins, correct, uploaded, discord_server
                     from leaderboard l 
                     join players p on (p.discord_uid = l.discord_uid)
-                    WHERE discord_server = {server} AND discord_uid = {player}
+                    WHERE p.discord_server = {server} AND p.discord_uid = {player}
                 """
         df = await self.dbu.getdf(query)
         return df
 
-    async def update_leaderboard(self, player, correct=0, win=0):
+    async def update_leaderboard(self, player, server, correct=0, win=0):
         query = """UPDATE leaderboard
                  SET wins = wins + %s, correct = correct + %s
-                 WHERE discord_uid = %s"""
+                 WHERE discord_uid = %s and discord_server = %s"""
 
         # Execute
-        await self.dbu.execute_query(query, (win, correct, player))
-
-    async def update_uploads(self, uid):
-        query = """
-                UPDATE leaderboard
-                SET uploaded = uploaded + 1
-                WHERE discord_uid = %s"""
-
-        await self.dbu.execute_query(query, (uid,))
+        await self.dbu.execute_query(query, (win, correct, player, server))
 
     async def refresh_ids(self, server):
         query1 = "set @row_number = 0"
@@ -117,3 +104,27 @@ class Quote_API:
         # Execute
         await self.dbu.execute_query(query1)
         await self.dbu.execute_query(query2, (server,))
+
+    async def get_nicknames(self, server):
+        query = f"""
+                        SELECT discord_uid, nickname
+                        FROM nicknames
+                        WHERE discord_server = '{str(server)}'
+                        """
+        df = await self.dbu.getdf(query)
+        return df
+
+    async def get_personal_nicknames(self, server, uid):
+        query = f"""
+                                SELECT nickname
+                                FROM nicknames
+                                WHERE discord_server = '{str(server)}'
+                                AND discord_uid = {uid}
+                                """
+        df = await self.dbu.getdf(query)
+        return df['nickname']
+
+    async def add_nickname(self, discord_uid, nickname, server):
+        query = """INSERT INTO nicknames (discord_uid, nickname, discord_server) VALUES (%s, %s, %s)"""
+        vals = (discord_uid, nickname, server)
+        await self.dbu.insert_one(query, vals)
