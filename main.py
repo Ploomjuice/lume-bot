@@ -8,6 +8,7 @@ import random
 from db_apis import Quote_API
 import asyncio
 from collections import Counter, defaultdict
+import numpy as np
 import re
 
 # bot intents
@@ -127,8 +128,11 @@ async def commands(ctx):
         **]delete_quote** *<quote_id>*: Deletes a quote from the server database, use with caution!\n
         **]quotes_quiz** *<length>*: Starts a "guess who said it?" quiz with the stored quotes\n
         **]leaderboard**: Views server leaderboard for the quotes quiz game (WIP)\n
-        **]set_nickname** *<name1|name2|...>* Adds nicknames to your profile 
+        **]set_nickname** *<name1|name2|...>*: Adds nicknames to your profile 
         (can be used to answer quote quiz questions)\n
+        **]minesweeper** *<rows>* *<columns>* *<bombs>*: Sends a game of minesweeper! 
+        (Warning: may cause lag when loading channel if used too often at once)\n
+        **]coin**: Flips a coin!
         
         """,
         color=Color.purple()
@@ -585,6 +589,95 @@ async def leaderboard(ctx):
 async def frame_quote(ctx, quote):
 
     pass
+
+@bot.command()
+async def minesweeper(ctx, rows: int, cols: int, bombs: int):
+    rows = int(rows)
+    cols = int(cols)
+    bombs = int(bombs)
+    field = np.zeros((rows+2, cols+2))
+    if rows > 11 or cols > 10:
+        await ctx.send("Too large! I can only support a maximum of 11 rows and 10 columns!")
+        return
+    elif bombs > rows * cols:
+        await ctx.send(f"You can't have more bombs than spaces! {bombs} bombs > {rows * cols} spaces")
+        return
+    for i in range(bombs):
+        # place bomb
+        r = random.randint(1, rows)
+        c = random.randint(1, cols)
+        if field[r, c] >= 0:
+            field[r, c] = -9
+        else:
+            while field[r, c] <= 0:
+                r = random.randint(1, rows)
+                c = random.randint(1, cols)
+            field[r,c] = -9
+
+        # adjust numbers
+        field[r-1, [c-1, c, c+1]] += 1
+        field[r, [c-1, c+1]] += 1
+        field[r+1, [c-1, c, c+1]] += 1
+
+    # get start position
+    game_view = field[1:-1, 1:-1]
+    positives = game_view[game_view >= 0]
+    try:
+        minimum = np.min(positives)
+        start_row, start_column = np.where(game_view == minimum)
+        start_pos_candidates = list(zip(start_row, start_column))
+        pos = start_pos_candidates[np.random.choice(len(start_pos_candidates))]
+        game_view[pos] += 10
+
+    except ValueError:
+        await ctx.send("erm")
+        await asyncio.sleep(5)
+
+
+    # format to discord message
+
+    emojis = [":zero:",":one:",":two:",":three:",":four:",":five:",":six:",":seven:",":eight:","💣"]
+    all_rows = []
+    for row in game_view:
+        emotes = ""
+        for val in row:
+            val = int(val)
+            if val < 0:
+                emotes += f"||{emojis[-1]}||"
+            elif 0 <= val < 10:
+                emotes += f"||{emojis[val]}||"
+            else:
+                emotes += emojis[val-10]
+        all_rows.append(emotes)
+
+    message = "\n".join(all_rows)
+    game = Embed(
+        title="Minesweeper! 💣",
+        description=message,
+        color=Color.dark_gray()
+    ).set_footer(text=f"There are {bombs} bombs in total, have fun!")
+
+    await ctx.send(embed=game)
+
+
+@bot.command()
+async def coin(ctx):
+    flip = np.random.choice([True, False])
+    author = str(ctx.author.name)
+    if flip:
+        heads = Embed(
+            title=f"{author} flipped a coin! :coin:",
+            description="Heads! :speaking_head:",
+            color=Color.random()
+        )
+        await ctx.send(embed=heads)
+    else:
+        tails = Embed(
+            title=f"{author} flipped a coin! :coin:",
+            description="Tails! :peach:",
+            color=Color.random()
+        )
+        await ctx.send(embed=tails)
 
 # PROFILE COMMANDS
 
