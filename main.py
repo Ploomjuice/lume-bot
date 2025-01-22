@@ -10,6 +10,7 @@ import asyncio
 from collections import Counter, defaultdict
 import numpy as np
 import re
+from mysql.connector.aio import Error
 
 # bot intents
 intents: Intents = Intents.default()  # Start with default intents.
@@ -98,11 +99,19 @@ async def sync(ctx: commands.Context) -> None:
 async def ping(ctx):
 
     latency = round(bot.latency * 1000)  # latency in ms
+    try:
+        if await quotes_db.dbu.con.is_connected():
+            message = "Connected to database!"
+        else:
+            message = "Not connected to database..."
+    except AttributeError:
+        message = "Error!"
+
     embed = discord.Embed(
         title="Pong! 🏓",
         description=f"Latency: {latency}ms",
         color=Color.blurple()
-    )
+    ).set_footer(text=message)
     await ctx.send(embed=embed)
 
 # Quote Game
@@ -596,7 +605,7 @@ async def minesweeper(ctx, rows: int, cols: int, bombs: int):
     cols = int(cols)
     bombs = int(bombs)
     field = np.zeros((rows+2, cols+2))
-    if rows > 11 or cols > 10:
+    if rows > 10 or cols > 10:
         await ctx.send("Too large! I can only support a maximum of 11 rows and 10 columns!")
         return
     elif bombs > rows * cols:
@@ -630,6 +639,8 @@ async def minesweeper(ctx, rows: int, cols: int, bombs: int):
         game_view[pos] += 10
 
     except ValueError:
+        await ctx.send("...")
+        await asyncio.sleep(2)
         await ctx.send("erm")
         await asyncio.sleep(5)
 
@@ -662,22 +673,29 @@ async def minesweeper(ctx, rows: int, cols: int, bombs: int):
 
 @bot.command()
 async def coin(ctx):
-    flip = np.random.choice([True, False])
+    flip = random.choices([1, -1, 0], weights=[4995, 4995, 10], k=1)[0]
     author = str(ctx.author.name)
-    if flip:
+    if flip == 1:
         heads = Embed(
             title=f"{author} flipped a coin! :coin:",
             description="Heads! :speaking_head:",
             color=Color.random()
         )
         await ctx.send(embed=heads)
-    else:
+    elif flip == -1:
         tails = Embed(
             title=f"{author} flipped a coin! :coin:",
             description="Tails! :peach:",
             color=Color.random()
         )
         await ctx.send(embed=tails)
+    else:
+        what = Embed(
+            title=f"{author} flipped a coin! :coin:",
+            description="WHAATTTT! The coin landed on its edge! :exploding_head:",
+            color=Color.random()
+        )
+        await ctx.send(embed=what)
 
 # PROFILE COMMANDS
 
